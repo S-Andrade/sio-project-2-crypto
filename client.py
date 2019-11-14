@@ -4,6 +4,15 @@ import base64
 import argparse
 import coloredlogs, logging
 import os
+from base64 import *
+
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric import padding
 
 logger = logging.getLogger('root')
 
@@ -29,6 +38,12 @@ class ClientProtocol(asyncio.Protocol):
         self.loop = loop
         self.state = STATE_CONNECT  # Initial State
         self.buffer = ''  # Buffer to receive data chunks
+        self.algorithms = []
+        self.server_public_key = ''
+        self.key = ''
+        self.encryptkey = ''
+        self.file_name_encrypted = ''
+        self.iv = ''
 
     def connection_made(self, transport) -> None:
         """
@@ -40,9 +55,13 @@ class ClientProtocol(asyncio.Protocol):
         self.transport = transport
 
         logger.debug('Connected to Server')
-        
-        message = {'type': 'OPEN', 'file_name': self.file_name}
+        input = 'AES_128_CBC_SHA512'
+        self.algorithms = input.split('_')
+        message = {'type': 'HELLO', 'data': input }
         self._send(message)
+
+        #message = {'type': 'OPEN', 'file_name': self.file_name}
+        #self._send(message)
 
         self.state = STATE_OPEN
 
@@ -92,11 +111,38 @@ class ClientProtocol(asyncio.Protocol):
             return
 
         mtype = message.get('type', None)
+        if mtype == 'PUBLIC_KEY':
+            '''
+            pem_public_key = message.get('data')
+            print(pem_public_key)
+            self.server_public_key = serialization.load_pem_public_key(
+                pem_public_key,
+                backend=default_backend()
+            )
+            print(self.public_key)
+            '''
+            filename = message.get('data')
+            with open(filename, "rb") as key_file:
+                self.server_public_key = serialization.load_pem_public_key(
+                    key_file.read(),
+                    backend=default_backend()
+                )
+            self.encryptkey = self.getEncriptKey()
+            print(self.encryptkey)
+            self._send({'type': 'SECURE', 'data': base64.b64encode(self.encryptkey)})
 
-        if mtype == 'OK':  # Server replied OK. We can advance the state
+
+        elif mtype == 'OK':  # Server replied OK. We can advance the state
             if self.state == STATE_OPEN:
                 logger.info("Channel open")
-                self.send_file(self.file_name)
+                if self.algorithms[0] == 'AES':
+                    self.iv = os.urandom(16)
+                if self.algorithms[0] == 'Salsa':
+                    self.iv = os.urandom(24)
+                self._send({'type': 'SECURE_IV', 'data': self.iv})
+
+                self.encryptFile()
+                self.send_file(self.file_name_encrypted)
             elif self.state == STATE_DATA:  # Got an OK during a message transfer.
                 # Reserved for future use
                 pass
@@ -154,6 +200,43 @@ class ClientProtocol(asyncio.Protocol):
 
         message_b = (json.dumps(message) + '\r\n').encode()
         self.transport.write(message_b)
+
+    def getEncriptKey(self):
+        salt = os.urandom(16)
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=100000,
+            backend=default_backend()
+        )
+        self.key = kdf.derive(salt)
+
+        if self.algorithms[3] == 'SHA256':
+            encrypted = self.server_public_key.encrypt(
+                self.key,
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
+            )
+        elif self.algorithms[3] == 'SHA512':
+            encrypted = self.server_public_key.encrypt(
+                self.key,
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA512()),
+                    algorithm=hashes.SHA512(),
+                    label=None
+                )
+            )
+        else:
+            logger.warning("Invalid algorithm")
+
+        return encrypted
+
+    def encryptFile(self):
+        pass
 
 
 def main():

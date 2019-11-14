@@ -6,6 +6,12 @@ import coloredlogs, logging
 import re
 import os
 from aio_tcpserver import tcp_server
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes
+from base64 import *
 
 logger = logging.getLogger('root')
 
@@ -30,6 +36,13 @@ class ClientHandler(asyncio.Protocol):
 		self.storage_dir = storage_dir
 		self.buffer = ''
 		self.peername = ''
+		self.algorithms = []
+		self.private_key = ''
+		self.public_key = ''
+		self.pem_public_key = ''
+		self.encriptkey = ''
+		self.key=''
+		self.iv = ''
 
 	def connection_made(self, transport) -> None:
 		"""
@@ -90,13 +103,37 @@ class ClientHandler(asyncio.Protocol):
 			return
 
 		mtype = message.get('type', "").upper()
-
-		if mtype == 'OPEN':
+		if mtype == 'HELLO':
+			self.algorithms = message.get('data').split('_')
+			if self.algorithms:
+				self.keyPair()
+				#print(b64decode(self.pem_public_key))
+				#self._send({'type': 'PUBLIC_KEY', 'data': str(b64decode(self.pem_public_key))})
+				self._send({'type': 'PUBLIC_KEY', 'data': 'public_key.pem'})
+				ret = True
+			else:
+				ret = False
+		elif mtype == 'SECURE':
+			self.encriptkey = message.get('data').encode('utf-8').strip()
+			if self.encriptkey != '':
+				self.getKey()
+				self._send({'type': 'OK'})
+				ret = True
+			else:
+				ret = False
+		elif mtype == 'SECURE_IV':
+			self.iv=message.get('data')
+			if self.iv != '':
+				ret = True
+			else:
+				ret= False
+		elif mtype == 'OPEN':
 			ret = self.process_open(message)
 		elif mtype == 'DATA':
 			ret = self.process_data(message)
 		elif mtype == 'CLOSE':
 			ret = self.process_close(message)
+			self.decryptFile()
 		else:
 			logger.warning("Invalid message type: {}".format(message['type']))
 			ret = False
@@ -221,6 +258,24 @@ class ClientHandler(asyncio.Protocol):
 
 		return True
 
+	def keyPair(self):
+		# gera a private key
+		logger.info("Private Key")
+		self.private_key = rsa.generate_private_key(
+			public_exponent=65537,
+			key_size=4096,
+			backend=default_backend()
+		)
+		logger.info("Public Key")
+		# gera a public key
+		self.public_key = self.private_key.public_key()
+		# guarda a public key num pem
+		self.pem_public_key = self.public_key.public_bytes(
+			encoding=serialization.Encoding.PEM,
+			format=serialization.PublicFormat.SubjectPublicKeyInfo
+		)
+		with open('public_key.pem', 'wb') as f:
+			f.write(self.pem_public_key)
 
 	def _send(self, message: str) -> None:
 		"""
@@ -232,6 +287,32 @@ class ClientHandler(asyncio.Protocol):
 
 		message_b = (json.dumps(message) + '\r\n').encode()
 		self.transport.write(message_b)
+
+	def getKey(self):
+		if self.algorithms[3] == 'SHA256':
+			self.key = self.private_key.decrypt(
+				self.encriptkey,
+				padding.OAEP(
+					mgf=padding.MGF1(algorithm=hashes.SHA256()),
+					algorithm=hashes.SHA256(),
+					label=None
+				)
+			)
+		elif self.algorithms[3] == 'SHA512':
+			self.key = self.private_key.decrypt(
+				self.encriptkey,
+				padding.OAEP(mgf=padding.MGF1(
+					algorithm=hashes.SHA512()),
+					algorithm=hashes.SHA512(),
+					label=None
+				)
+			)
+		else:
+			logger.warning("Invalid algorithm")
+
+	def decryptFile(self):
+		pass
+
 
 def main():
 	global storage_dir
