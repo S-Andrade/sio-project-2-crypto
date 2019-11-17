@@ -14,6 +14,22 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import padding
 
+import os
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.backends import default_backend
+import getpass
+import base64
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from salsa20 import XSalsa20_xor
+
+
+
+
 logger = logging.getLogger('root')
 
 STATE_CONNECT = 0
@@ -42,7 +58,7 @@ class ClientProtocol(asyncio.Protocol):
         self.server_public_key = ''
         self.key = ''
         self.encryptkey = ''
-        self.file_name_encrypted = ''
+        self.file_name_encrypted = 'clientFiles/file_encrypted.txt'
         self.iv = ''
 
     def connection_made(self, transport) -> None:
@@ -58,6 +74,7 @@ class ClientProtocol(asyncio.Protocol):
         input = 'AES_128_CBC_SHA512'
         self.algorithms = input.split('_')
         message = {'type': 'HELLO', 'data': input }
+        logger.info("Hello")
         self._send(message)
 
         #message = {'type': 'OPEN', 'file_name': self.file_name}
@@ -112,37 +129,30 @@ class ClientProtocol(asyncio.Protocol):
 
         mtype = message.get('type', None)
         if mtype == 'PUBLIC_KEY':
-            '''
-            pem_public_key = message.get('data')
-            print(pem_public_key)
+            pem_public_key = base64.b64decode(message.get('data'))
             self.server_public_key = serialization.load_pem_public_key(
                 pem_public_key,
                 backend=default_backend()
             )
-            print(self.public_key)
-            '''
-            filename = message.get('data')
-            with open(filename, "rb") as key_file:
-                self.server_public_key = serialization.load_pem_public_key(
-                    key_file.read(),
-                    backend=default_backend()
-                )
             self.encryptkey = self.getEncriptKey()
-            print(self.encryptkey)
-            self._send({'type': 'SECURE', 'data': base64.b64encode(self.encryptkey)})
+            logger.info("Send key")
+            self._send({'type': 'SECURE', 'data': base64.b64encode(self.encryptkey).decode()})
 
+            if 'AES' in self.algorithms:
+                self.iv = os.urandom(16)
+            if 'Salsa' in self.algorithms:
+                self.iv = os.urandom(24)
+            logger.info("Send iv")
+            self._send({'type': 'SECURE_IV', 'data': base64.b64encode(self.iv).decode()})
+            self.encryptFile()
+            message = {'type': 'OPEN', 'file_name': self.file_name_encrypted}
+            self._send(message)
+            self.send_file(self.file_name_encrypted)
 
-        elif mtype == 'OK':  # Server replied OK. We can advance the state
+        if mtype == 'OK':  # Server replied OK. We can advance the state
             if self.state == STATE_OPEN:
                 logger.info("Channel open")
-                if self.algorithms[0] == 'AES':
-                    self.iv = os.urandom(16)
-                if self.algorithms[0] == 'Salsa':
-                    self.iv = os.urandom(24)
-                self._send({'type': 'SECURE_IV', 'data': self.iv})
-
-                self.encryptFile()
-                self.send_file(self.file_name_encrypted)
+                self.send_file(self.file_name)
             elif self.state == STATE_DATA:  # Got an OK during a message transfer.
                 # Reserved for future use
                 pass
@@ -212,7 +222,7 @@ class ClientProtocol(asyncio.Protocol):
         )
         self.key = kdf.derive(salt)
 
-        if self.algorithms[3] == 'SHA256':
+        if 'SHA256' in self.algorithms:
             encrypted = self.server_public_key.encrypt(
                 self.key,
                 padding.OAEP(
@@ -221,7 +231,7 @@ class ClientProtocol(asyncio.Protocol):
                     label=None
                 )
             )
-        elif self.algorithms[3] == 'SHA512':
+        elif 'SHA512' in self.algorithms:
             encrypted = self.server_public_key.encrypt(
                 self.key,
                 padding.OAEP(
@@ -236,8 +246,36 @@ class ClientProtocol(asyncio.Protocol):
         return encrypted
 
     def encryptFile(self):
-        pass
+        with open(self.file_name, 'r') as file:
+            text = file.read()
+        text = str.encode(text)
+        if "AES" in self.algorithms:
+            algorithm_name = algorithms.AES(self.key)
+            if "CBC" in  self.algorithms:
+                bs = int(algorithm_name.block_size / 8)
+                missing_bytes = bs - (len(text) % bs)
+                if missing_bytes == 0:
+                    missing_bytes = bs
+                padding = bytes([missing_bytes] * missing_bytes)
+                text += padding
+                cipher = Cipher(algorithm_name, modes.CBC(self.iv), backend=default_backend())
+                encryptor = cipher.encryptor()
+                end = encryptor.update(text) + encryptor.finalize()
+            elif "GCM" in self.algorithms:
+                aad = str.encode(''.join(self.algorithms))
+                aesgcm = AESGCM(self.key)
+                end = aesgcm.encrypt(self.iv, text, aad)
+            else:
+                raise (Exception("Invalid mode"))
 
+        elif "Salsa20" in self.algorithms:
+            end = XSalsa20_xor(text, self.iv, self.key)
+
+        else:
+            raise (Exception("Invalid algorithm"))
+
+        with open(self.file_name_encrypted, 'wb') as file:
+            file.write(end)
 
 def main():
     parser = argparse.ArgumentParser(description='Sends files to servers.')
