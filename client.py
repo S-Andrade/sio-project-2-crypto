@@ -1,29 +1,15 @@
 import asyncio
 import json
-import base64
 import argparse
 import coloredlogs, logging
-import os
-from base64 import *
-
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.asymmetric import padding
-
 import os
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.backends import default_backend
-import getpass
 import base64
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from salsa20 import XSalsa20_xor
 
@@ -71,7 +57,7 @@ class ClientProtocol(asyncio.Protocol):
         self.transport = transport
 
         logger.debug('Connected to Server')
-        input = 'AES_128_CBC_SHA512'
+        input = 'Salsa20_SHA256'
         self.algorithms = input.split('_')
         message = {'type': 'HELLO', 'data': input }
         logger.info("Hello")
@@ -140,7 +126,7 @@ class ClientProtocol(asyncio.Protocol):
 
             if 'AES' in self.algorithms:
                 self.iv = os.urandom(16)
-            if 'Salsa' in self.algorithms:
+            if 'Salsa20' in self.algorithms:
                 self.iv = os.urandom(24)
             logger.info("Send iv")
             self._send({'type': 'SECURE_IV', 'data': base64.b64encode(self.iv).decode()})

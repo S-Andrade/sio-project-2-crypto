@@ -1,27 +1,12 @@
 import asyncio
 import json
-import base64
 import argparse
 import coloredlogs, logging
-import re
-import os
-
-import self as self
 from aio_tcpserver import tcp_server
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives import hashes
-from base64 import *
-
-
 import os
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.backends import default_backend
-import getpass
 import base64
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
@@ -304,7 +289,7 @@ class ClientHandler(asyncio.Protocol):
 		self.transport.write(message_b)
 
 	def getKey(self):
-		if self.algorithms[3] == 'SHA256':
+		if 'SHA256' in self.algorithms:
 			self.key = self.private_key.decrypt(
 				self.encriptkey,
 				padding.OAEP(
@@ -313,7 +298,7 @@ class ClientHandler(asyncio.Protocol):
 					label=None
 				)
 			)
-		elif self.algorithms[3] == 'SHA512':
+		elif 'SHA512' in self.algorithms:
 			self.key = self.private_key.decrypt(
 				self.encriptkey,
 				padding.OAEP(mgf=padding.MGF1(
